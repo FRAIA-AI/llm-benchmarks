@@ -132,7 +132,7 @@ DIARIZATION_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
     "Qwen/Qwen2.5-14B-Instruct"
     "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    "mistralai/Mistral-Nemo-Instruct-2407"
+#    "mistralai/Mistral-Nemo-Instruct-2407"
     "google/gemma-2-9b-it"
 )
 
@@ -150,10 +150,10 @@ done
 # PHASE 2: CLINICAL NOTES
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
-    "clinical-llama/Clinical-Llama-3-70B"
-    "m42-health/med42-v2-70b"
-    "aaditya/OpenBioLLM-Llama3-70B"
-    "dracarys-llm/MedGemma-2-27b"
+    "clinicalnlplab/me-llama-70B-chat"
+    "m42-health/Llama3-Med42-70B"
+    "aaditya/Llama3-OpenBioLLM-70B"
+    "Dracarys2-72B-Instruct"
     "meta-llama/Llama-3.3-70B-Instruct"
     "Qwen/Qwen2.5-72B-Instruct"
     "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
