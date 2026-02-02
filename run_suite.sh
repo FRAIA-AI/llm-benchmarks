@@ -1,8 +1,8 @@
-// run_suite.sh
-
 #!/bin/bash
 
-# 1. Setup & Checks
+# run_suite.sh
+
+# 1. Setup & Environment
 if [ -f .env ]; then
   export $(echo $(cat .env | sed 's/#.*//g' | xargs) | envsubst)
 fi
@@ -12,30 +12,30 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-RESULTS_DIR="./results"
-CACHE_DIR="./hf_cache"
-CONFIGS_DIR="./configs"
-ERROR_LOG="./results/error_log.txt"
+# Ensure project directories exist on host with correct permissions
+# Using project-local paths for total control over write access
+mkdir -p ./results
+mkdir -p ./hf_cache
+mkdir -p ./configs
 
-mkdir -p $RESULTS_DIR
-mkdir -p $CACHE_DIR
-mkdir -p $CONFIGS_DIR
+ERROR_LOG="./results/error_log.txt"
 touch $ERROR_LOG
 
 echo "======================================================="
 echo "   PEOPLES DOCTOR - H100 BENCHMARK SUITE"
 echo "======================================================="
-echo "Date: $(date)"
-echo "Output Directory: $RESULTS_DIR"
-echo "Cache Directory: $CACHE_DIR"
+echo "Date:              $(date)"
+echo "Project Root:      $(pwd)"
+echo "Results Directory: ./results"
+echo "Model Cache:       ./hf_cache"
 echo "======================================================="
 
-# Function to run benchmark with resilience
+# Helper function for resilient execution
 execute_benchmark() {
     local model=$1
     local tp=$2
     local type=$3
-    local timeout=$4
+    local timeout_val=$4
 
     echo "----------------------------------------------------"
     echo ">>> TESTING: $model ($type)"
@@ -45,26 +45,23 @@ execute_benchmark() {
     export TENSOR_PARALLEL_SIZE=$tp
     export TEST_TYPE=$type
     
-    # Execute with timeout and capture exit status
-    timeout "${timeout}s" docker compose up --build --abort-on-container-exit
+    # Run with timeout and capture exit status
+    timeout "${timeout_val}s" docker compose up --build --abort-on-container-exit
     local status=$?
 
     if [ $status -eq 124 ]; then
-        echo "!!! TIMEOUT: $model exceeded ${timeout}s limit. Skipping..." | tee -a "$ERROR_LOG"
+        echo "!!! TIMEOUT: $model exceeded ${timeout_val}s. Skipping..." | tee -a "$ERROR_LOG"
     elif [ $status -ne 0 ]; then
         echo "!!! FAILURE: $model failed with exit code $status. Skipping..." | tee -a "$ERROR_LOG"
     else
         echo ">>> SUCCESS: $model completed."
     fi
     
-    # Ensure cleanup occurs regardless of success or failure
+    # Force container removal and VRAM release
     docker compose down
 }
 
-# -----------------------------------------------------------------------------
-# PHASE 1: DIARIZATION JUDGE (Small/Medium Models)
-# -----------------------------------------------------------------------------
-
+# --- PHASE 1: DIARIZATION JUDGE (Small Models) ---
 DIARIZATION_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
@@ -75,16 +72,12 @@ DIARIZATION_MODELS=(
 )
 
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"
-
 for model in "${DIARIZATION_MODELS[@]}"; do
     execute_benchmark "$model" 1 "diarization" 480
     sleep 5
 done
 
-# -----------------------------------------------------------------------------
-# PHASE 2: CLINICAL NOTES (Large/Medical Models)
-# -----------------------------------------------------------------------------
-
+# --- PHASE 2: CLINICAL NOTES (Large/Medical Models) ---
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
     "clinical-llama/Clinical-Llama-3-70B"
@@ -96,8 +89,7 @@ CLINICAL_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 )
 
-echo ">>> STARTING PHASE 2: CLINICAL DEEP DIVE (SOAP Notes)"
-
+echo ">>> STARTING PHASE 2: CLINICAL DEEP DIVE"
 for model in "${CLINICAL_MODELS[@]}"; do
     execute_benchmark "$model" 8 "clinical" 900
     sleep 10
@@ -106,10 +98,6 @@ done
 echo "======================================================="
 echo "   BENCHMARK COMPLETE - COMPRESSING RESULTS"
 echo "======================================================="
-
-if [ -s "$ERROR_LOG" ]; then
-    echo "Warning: Some models failed. Check $ERROR_LOG for details."
-fi
 
 tar -czf benchmark_results.tar.gz results/
 echo ">>> Results saved to benchmark_results.tar.gz"

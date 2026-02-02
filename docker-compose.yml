@@ -3,7 +3,7 @@
 services:
   vllm:
     image: vllm/vllm-openai:latest
-    container_name: benchmark_engine
+    container_name: vllm_server
     runtime: nvidia
     ipc: host
     environment:
@@ -20,10 +20,7 @@ services:
       --gpu-memory-utilization 0.90
       --max-num-seqs 128
       --kv-cache-dtype auto
-      --swap-space 4
       --enforce-eager
-    ports:
-      - "8000:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
