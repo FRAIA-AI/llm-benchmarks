@@ -146,12 +146,12 @@ fi
 
 # PHASE 1: DIARIZATION
 DIARIZATION_MODELS=(
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
-    "Qwen/Qwen2.5-14B-Instruct"
-    "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    "mistralai/Mistral-Nemo-Instruct-2407"
-    "google/gemma-2-9b-it"
+#    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+#    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+#    "Qwen/Qwen2.5-14B-Instruct"
+#    "meta-llama/Meta-Llama-3.1-8B-Instruct"
+#    "mistralai/Mistral-Nemo-Instruct-2407"
+   "google/gemma-2-9b-it"
 )
 
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"
