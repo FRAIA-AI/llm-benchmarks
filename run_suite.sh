@@ -208,6 +208,7 @@ DIARIZATION_MODELS=(
     "Qwen/Qwen2.5-14B-Instruct"
     "meta-llama/Meta-Llama-3.1-8B-Instruct"
     "mistralai/Mistral-Nemo-Instruct-2407"
+    "m42-health/Llama3-Med42-8B"
 )
 
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"

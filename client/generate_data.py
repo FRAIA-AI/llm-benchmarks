@@ -124,18 +124,17 @@ DIARIZATION_SYSTEM_PROMPT = """
 You are a conversation analysis engine.
 
 Input:
-A transcript containing one or more [Unknown] speaker labels.
+A transcript containing one or more segments labeled as [Unknown].
 
 Task:
-For EACH [Unknown] segment, infer the most likely speaker identity
-based on local context, conversational role, and turn-taking logic.
+For EACH [Unknown] segment, independently infer the most likely speaker identity
+based on local context and turn-taking logic.
 
-Important rules:
-- Each [Unknown] segment must be evaluated independently.
-- Different [Unknown] segments may map to different speakers.
-- Do NOT assume all [Unknown] segments belong to the same person.
-- Use Speaker D ONLY when the speech clearly indicates a companion
-  speaking on behalf of or about the patient.
+Critical rules:
+- Do NOT assume that all [Unknown] segments belong to the same speaker.
+- Different [Unknown] segments MAY belong to different speakers.
+- Each [Unknown] segment must be classified independently.
+- Output one speaker label per [Unknown] segment.
 
 Speaker labels:
 - Speaker A — Doctor
@@ -143,17 +142,10 @@ Speaker labels:
 - Speaker C — Nurse / Assistant
 - Speaker D — Companion (guardian, parent, partner, child)
 
-Companion indicators include:
-- Speaking *for* the patient
-- Referring to the patient in the third person
-- Expressing concern or history on behalf of the patient
-- Pediatric or geriatric accompaniment cues
-
-Output:
-Strictly JSON format:
+Output format (strict):
 {
   "segments": [
-    {"timestamp": "...", "speaker": "..."}
+    { "timestamp": "...", "speaker": "..." }
   ]
 }
 """
@@ -165,7 +157,7 @@ def generate_configs():
         "diarization": {
             "system_prompt": DIARIZATION_SYSTEM_PROMPT,
             "user_prompt": DIARIZATION_SAMPLE,
-            "max_tokens": 512,
+            "max_tokens": 1024,
             "temperature": 0.0,
             "concurrency": 64,
             "requests_count": 200
