@@ -1,0 +1,41 @@
+# docker-compose.yml
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: benchmark_engine
+    runtime: nvidia
+    ipc: host
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - NCCL_P2P_LEVEL=NVL
+    volumes:
+      - ./hf_cache:/root/.cache/huggingface
+    command: >
+      --model ${MODEL_NAME}
+      --tensor-parallel-size ${TENSOR_PARALLEL_SIZE}
+      --max-model-len 16384
+      --trust-remote-code
+      --disable-log-requests
+      --gpu-memory-utilization 0.95
+      --enforce-eager
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  benchmarker:
+    build: ./client
+    container_name: benchmark_client
+    depends_on:
+      vllm:
+        condition: service_healthy
+    environment:
+      - MODEL_NAME=${MODEL_NAME}
+      - TEST_TYPE=${TEST_TYPE}
+    volumes:
+      - ./results:/app/results
+      - ./configs:/app/configs
