@@ -144,11 +144,20 @@ run_local() {
     # Wait for readiness
     for _ in {1..60}; do
         if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+            READY=true
             echo ">>> vLLM is responding"
             break
         fi
         sleep 5
     done
+
+    if [[ "$READY" != "true" ]]; then
+        echo "!!! vLLM failed to become ready"
+        cat vllm.log
+        kill "$SERVER_PID" || true
+        wait "$SERVER_PID" 2>/dev/null || true
+        return 1
+    fi
 
     export MODEL_NAME="$model"
     export TEST_TYPE="$type"

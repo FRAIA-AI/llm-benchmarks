@@ -1,300 +1,199 @@
+#!/usr/bin/env python3
+
 import asyncio
 import aiohttp
-import time
 import json
 import os
-import sys
+import time
+import uuid
 import numpy as np
-from uuid import uuid4
-from datetime import datetime
+from pathlib import Path
+from typing import List, Dict, Any
 
-# =========================================================
+# ---------------------------------------------------------
 # Environment
-# =========================================================
+# ---------------------------------------------------------
+MODEL_NAME = os.environ["MODEL_NAME"]
+TEST_TYPE = os.environ["TEST_TYPE"]
+BASE_URL = os.environ["VLLM_BASE_URL"]
+RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", "./results"))
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "./configs"))
 
-VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000")
-VLLM_URL = f"{VLLM_BASE_URL}/v1/chat/completions"
-HEALTH_URL = f"{VLLM_BASE_URL}/health"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-MODEL_NAME = os.getenv("MODEL_NAME")
-TEST_TYPE = os.getenv("TEST_TYPE", "diarization")
+# ---------------------------------------------------------
+# Benchmark parameters
+# ---------------------------------------------------------
+CONCURRENCY = int(os.environ.get("CONCURRENCY", 4))
+REQUESTS = int(os.environ.get("REQUESTS", 20))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", 512))
+TEMPERATURE = float(os.environ.get("TEMPERATURE", 0.2))
+GPUS = int(os.environ.get("GPUS", 8))
 
-RESULTS_DIR = os.getenv("RESULTS_DIR", "./results")
-CONFIG_DIR = os.getenv("CONFIG_DIR", "./configs")
+# ---------------------------------------------------------
+# Prompt builders (CRITICAL)
+# ---------------------------------------------------------
+def build_prompt(test_type: str, sample: str) -> str:
+    if test_type == "clinical":
+        return (
+            "You are a clinical language model.\n\n"
+            "Create a structured clinical note from the following transcript.\n\n"
+            "Transcript:\n"
+            f"{sample}\n\n"
+            "Clinical Note:\n"
+        )
+    elif test_type == "diarization":
+        return (
+            "Identify speakers and rewrite the following transcript "
+            "with speaker labels.\n\n"
+            f"{sample}\n\n"
+            "Diarized Transcript:\n"
+        )
+    else:
+        return sample
 
-WORKLOAD_FILE = os.path.join(CONFIG_DIR, "workloads.json")
 
-GPU_COUNT = int(os.getenv("RUNPOD_GPU_COUNT", "1"))
+# ---------------------------------------------------------
+# Workload generation
+# ---------------------------------------------------------
+def generate_workload() -> List[str]:
+    samples = []
+    for i in range(REQUESTS):
+        samples.append(
+            f"Patient reports chest pain for the last {i+1} days, "
+            f"worse on exertion, with mild shortness of breath."
+        )
+    return samples
 
-os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# =========================================================
-# Streaming Request Handler
-# =========================================================
-
-async def make_request(session, payload, concurrency_level):
-    request_id = str(uuid4())
-
-    start_ts = time.time()
-    first_token_ts = None
-    last_token_ts = None
-
-    full_text = ""
-    usage = None
-    inter_token_latencies = []
-
-    payload = payload.copy()
-    payload["stream"] = True
-
-    try:
-        async with session.post(VLLM_URL, json=payload) as response:
-            if response.status != 200:
-                return {
-                    "request_id": request_id,
-                    "error": await response.text()
-                }
-
-            async for line in response.content:
-                now = time.time()
-                line = line.decode("utf-8").strip()
-
-                if not line or line == "data: [DONE]":
-                    continue
-
-                if not line.startswith("data: "):
-                    continue
-
-                data = json.loads(line[6:])
-
-                # Final usage block
-                if "usage" in data:
-                    usage = data["usage"]
-
-                delta = data.get("choices", [{}])[0].get("delta", {})
-                content = delta.get("content")
-
-                if content:
-                    if first_token_ts is None:
-                        first_token_ts = now
-                    else:
-                        inter_token_latencies.append(now - last_token_ts)
-
-                    last_token_ts = now
-                    full_text += content
-
-        end_ts = time.time()
-
-        if not usage or not first_token_ts:
-            return {
-                "request_id": request_id,
-                "error": "Missing usage or tokens"
-            }
-
-        decode_time = last_token_ts - first_token_ts
-
-        record = {
-            "request_id": request_id,
-            "model": MODEL_NAME,
-            "test_type": TEST_TYPE,
-            "concurrency": concurrency_level,
-
-            "timing": {
-                "request_start_ts": start_ts,
-                "first_token_ts": first_token_ts,
-                "last_token_ts": last_token_ts,
-                "total_latency_ms": (end_ts - start_ts) * 1000,
-                "ttft_ms": (first_token_ts - start_ts) * 1000,
-                "decode_time_ms": decode_time * 1000,
-                "tpot_ms": (decode_time / usage["completion_tokens"]) * 1000
-            },
-
-            "tokens": {
-                "prompt_tokens": usage["prompt_tokens"],
-                "completion_tokens": usage["completion_tokens"],
-                "total_tokens": usage["total_tokens"],
-                "tokens_per_second": usage["completion_tokens"] / decode_time
-            },
-
-            "output": {
-                "raw_text": full_text,
-                "truncated": False
-            },
-
-            "runtime": {
-                "gpu_count": GPU_COUNT,
-                "tokens_per_gpu_per_sec":
-                    (usage["completion_tokens"] / decode_time) / GPU_COUNT
-            }
-        }
-
-        # Attempt JSON parse (important for clinical)
-        try:
-            parsed = json.loads(full_text)
-            record["output"]["parsed_json"] = parsed
-            record["output"]["valid_json"] = True
-        except Exception:
-            record["output"]["valid_json"] = False
-
-        return record
-
-    except Exception as e:
-        return {
-            "request_id": request_id,
-            "error": str(e)
-        }
-
-# =========================================================
-# Benchmark Runner
-# =========================================================
-
-async def run_benchmark():
-    print(">>> Generating Workload Data...")
-    if os.system("python client/generate_data.py") != 0:
-        print("!!! Data generation failed")
-        sys.exit(1)
-
-    with open(WORKLOAD_FILE) as f:
-        config = json.load(f)[TEST_TYPE]
-
-    concurrency = config["concurrency"]
-    requests_count = config["requests_count"]
-
-    print("=================================================")
-    print(f" STARTING BENCHMARK: {TEST_TYPE.upper()}")
-    print(f" Model: {MODEL_NAME}")
-    print(f" Target: {VLLM_BASE_URL}")
-    print(f" Concurrency: {concurrency}")
-    print(f" Requests: {requests_count}")
-    print(f" GPUs: {GPU_COUNT}")
-    print("=================================================")
+# ---------------------------------------------------------
+# Single request
+# ---------------------------------------------------------
+async def run_single(
+    session: aiohttp.ClientSession,
+    prompt: str,
+) -> Dict[str, Any]:
 
     payload = {
         "model": MODEL_NAME,
-        "messages": [
-            {"role": "system", "content": config["system_prompt"]},
-            {"role": "user", "content": config["user_prompt"]}
-        ],
-        "max_tokens": config["max_tokens"],
-        "temperature": config["temperature"]
+        "prompt": prompt,
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
     }
 
-    async with aiohttp.ClientSession() as session:
-        print(">>> Waiting for vLLM to initialize...")
-        start_wait = time.time()
+    start = time.perf_counter()
 
-        while True:
-            try:
-                async with session.get(HEALTH_URL) as r:
-                    if r.status == 200:
-                        break
-            except:
-                pass
+    try:
+        async with session.post(
+            f"{BASE_URL}/v1/completions",
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=300),
+        ) as resp:
 
-            if time.time() - start_wait > 900:
-                print("!!! vLLM failed to become healthy")
-                sys.exit(1)
+            ttft = time.perf_counter() - start
+            data = await resp.json()
+            end = time.perf_counter()
 
-            await asyncio.sleep(5)
+            if "choices" not in data or not data["choices"]:
+                return {"ok": False, "error": "No choices returned"}
 
-        print(f">>> vLLM Ready (Waited {int(time.time() - start_wait)}s)")
-        print(">>> Starting stress test...")
+            text = data["choices"][0].get("text", "")
+            usage = data.get("usage", {})
 
-        start_bench = time.time()
+            return {
+                "ok": True,
+                "latency": end - start,
+                "ttft": ttft,
+                "tpot": (end - ttft) / max(len(text.split()), 1),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "text": text,
+            }
 
-        sem = asyncio.Semaphore(concurrency)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-        async def bounded():
+
+# ---------------------------------------------------------
+# Benchmark runner
+# ---------------------------------------------------------
+async def run_benchmark():
+
+    workload = generate_workload()
+    prompts = [build_prompt(TEST_TYPE, s) for s in workload]
+
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY)
+    timeout = aiohttp.ClientTimeout(total=None)
+
+    results = []
+    start_time = time.perf_counter()
+
+    async with aiohttp.ClientSession(
+        connector=connector, timeout=timeout
+    ) as session:
+
+        sem = asyncio.Semaphore(CONCURRENCY)
+
+        async def bounded(prompt):
             async with sem:
-                return await make_request(session, payload, concurrency)
+                return await run_single(session, prompt)
 
-        tasks = [bounded() for _ in range(requests_count)]
+        tasks = [bounded(p) for p in prompts]
         results = await asyncio.gather(*tasks)
 
-        total_duration = time.time() - start_bench
+    total_time = time.perf_counter() - start_time
 
-    valid = [r for r in results if "error" not in r]
-    errors = [r for r in results if "error" in r]
+    successes = [r for r in results if r.get("ok")]
+    failures = [r for r in results if not r.get("ok")]
 
-    total_completion_tokens = sum(r["tokens"]["completion_tokens"] for r in valid)
-    total_prompt_tokens = sum(r["tokens"]["prompt_tokens"] for r in valid)
+    latencies = [r["latency"] for r in successes]
+    ttft = [r["ttft"] for r in successes]
+    tpot = [r["tpot"] for r in successes]
 
-    # =====================================================
-    # Aggregates
-    # =====================================================
+    prompt_tokens = sum(r["prompt_tokens"] for r in successes)
+    completion_tokens = sum(r["completion_tokens"] for r in successes)
+    total_tokens = prompt_tokens + completion_tokens
 
-    summary = {
-        "meta": {
-            "model": MODEL_NAME,
-            "test_type": TEST_TYPE,
-            "timestamp": datetime.now().isoformat(),
-            "concurrency": concurrency,
-            "requests": requests_count,
-            "gpus": GPU_COUNT
-        },
-        "results": {
-            "successful": len(valid),
-            "failed": len(errors),
-            "total_duration_sec": total_duration,
-
-            "throughput": {
-                "tokens_per_sec": total_completion_tokens / total_duration,
-                "tokens_per_sec_per_gpu":
-                    (total_completion_tokens / total_duration) / GPU_COUNT,
-                "tokens_per_hour":
-                    (total_completion_tokens / total_duration) * 3600
-            },
-
-            "latency": {
-                "avg_latency_ms":
-                    np.mean([r["timing"]["total_latency_ms"] for r in valid]),
-                "p95_latency_ms":
-                    np.percentile(
-                        [r["timing"]["total_latency_ms"] for r in valid], 95
-                    ),
-                "avg_ttft_ms":
-                    np.mean([r["timing"]["ttft_ms"] for r in valid]),
-                "avg_tpot_ms":
-                    np.mean([r["timing"]["tpot_ms"] for r in valid])
-            },
-
-            "tokens": {
-                "avg_prompt_tokens":
-                    total_prompt_tokens / len(valid),
-                "avg_completion_tokens":
-                    total_completion_tokens / len(valid),
-                "avg_total_tokens":
-                    (total_prompt_tokens + total_completion_tokens) / len(valid)
-            },
-
-            "quality": {
-                "valid_json_ratio":
-                    sum(r["output"].get("valid_json", False) for r in valid) / len(valid)
-            },
-
-            "errors": errors[:5]
-        }
+    report = {
+        "model": MODEL_NAME,
+        "test_type": TEST_TYPE,
+        "total_requests": REQUESTS,
+        "successful": len(successes),
+        "failed": len(failures),
+        "total_duration_sec": total_time,
+        "throughput_tokens_per_sec": (
+            total_tokens / total_time if total_tokens > 0 else 0.0
+        ),
+        "avg_latency_sec": float(np.mean(latencies)) if latencies else 0.0,
+        "p95_latency_ms": float(np.percentile(latencies, 95) * 1000) if latencies else 0.0,
+        "avg_ttft_ms": float(np.mean(ttft) * 1000) if ttft else 0.0,
+        "avg_tpot_ms": float(np.mean(tpot) * 1000) if tpot else 0.0,
+        "tokens_in": prompt_tokens,
+        "tokens_out": completion_tokens,
+        "tokens_per_gpu_per_sec": (
+            total_tokens / total_time / GPUS if total_tokens > 0 else 0.0
+        ),
+        "samples": [
+            {
+                "prompt": prompts[i],
+                "output": successes[i]["text"] if i < len(successes) else None,
+            }
+            for i in range(min(len(successes), 3))
+        ],
+        "errors": failures[:5],
+        "status": "OK" if successes else "NO_SUCCESS",
     }
 
-    safe_model = MODEL_NAME.replace("/", "_")
-    raw_path = os.path.join(
-        RESULTS_DIR, f"{TEST_TYPE}_{safe_model}_raw.jsonl"
-    )
-    summary_path = os.path.join(
-        RESULTS_DIR, f"{TEST_TYPE}_{safe_model}_{int(time.time())}.json"
-    )
+    out_file = RESULTS_DIR / f"{TEST_TYPE}_{MODEL_NAME.replace('/', '_')}_{int(time.time())}.json"
+    out_file.write_text(json.dumps(report, indent=2))
 
-    with open(raw_path, "w") as f:
-        for r in valid:
-            f.write(json.dumps(r) + "\n")
+    print(f">>> Report saved: {out_file}")
+    print(json.dumps(report, indent=2))
 
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
 
-    print(f">>> Raw results: {raw_path}")
-    print(f">>> Summary: {summary_path}")
-    print(json.dumps(summary["results"], indent=2))
-
-# =========================================================
-
+# ---------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------
 if __name__ == "__main__":
     asyncio.run(run_benchmark())
