@@ -13,3 +13,4 @@ venv/
 results/
 configs/
 hf_cache/
+vllm.log

@@ -4,14 +4,14 @@ Standardized performance evaluation for **8× NVIDIA H100 / A100 GPU clusters** 
 
 This suite benchmarks **real-world LLM inference workloads**, with a focus on:
 
-- High-concurrency diarization inference  
-- Long-context clinical note generation  
-- Token-level latency and throughput  
-- Per-GPU efficiency on multi-GPU systems  
+- High-concurrency diarization inference
+- Long-context clinical note generation
+- Token-level latency and throughput
+- Per-GPU efficiency on multi-GPU systems
 
 
 ---
-## Huggingface Models that that Require Access / Licence Acceptance
+## Huggingface Models that Require Access / Licence Acceptance
 
 Meta LLaMA 3.1 8B Instruct
 👉 https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct
