@@ -1,74 +1,122 @@
 #!/bin/bash
+set -euo pipefail
 
-# run_suite.sh
+# =========================================================
+# run_suite.sh — H100 Benchmark Suite
+# =========================================================
 
-# 1. Setup & Checks
+# ---------------------------------------------------------
+# Load environment
+# ---------------------------------------------------------
 if [ -f .env ]; then
-  export $(echo $(cat .env | sed 's/#.*//g' | xargs) | envsubst)
+  export $(grep -v '^#' .env | xargs)
 fi
 
-# Enforce cache dirs for all subprocesses
-export HF_HOME
-export HF_HUB_CACHE
-export TRANSFORMERS_CACHE
-export XDG_CACHE_HOME
-export VLLM_CACHE_DIR
-export TORCH_HOME
-
-if [ -z "$HF_TOKEN" ]; then
+if [ -z "${HF_TOKEN:-}" ]; then
     echo "ERROR: HF_TOKEN is missing. Please create a .env file."
     exit 1
 fi
 
-RESULTS_DIR="./results"
-CACHE_DIR="./hf_cache"
-CONFIGS_DIR="./configs"
-ERROR_LOG="./results/error_log.txt"
-
-mkdir -p $RESULTS_DIR
-mkdir -p $CACHE_DIR
-mkdir -p $CONFIGS_DIR
-touch $ERROR_LOG
-
+# ---------------------------------------------------------
+# Mode detection
+# ---------------------------------------------------------
 MODE="docker"
-if [[ "$1" == "--local" ]]; then
+if [[ "${1:-}" == "--local" ]]; then
     MODE="local"
     echo ">>> Running in LOCAL mode (Direct host execution)"
 else
     echo ">>> Running in DOCKER mode"
 fi
 
-get_max_len() {
-  case "$1" in
-    epfl-llm/meditron-70b)
-      echo 4096
-      ;;
-    m42-health/Llama3-Med42-70B)
-      echo 8192
-      ;;
-    aaditya/Llama3-OpenBioLLM-70B)
-      echo 8192
-      ;;
-    abacusai/Dracarys2-72B-Instruct)
-      echo 16384
-      ;;
-    Qwen/Qwen2.5-72B-Instruct)
-      echo 16384
-      ;;
-    meta-llama/Llama-3.3-70B-Instruct)
-      echo 16384
-      ;;
-    *)
-      echo 8192
-      ;;
-  esac
-}
+# ---------------------------------------------------------
+# Paths
+# ---------------------------------------------------------
+VENV_PATH="/workspace/venv"
+
+RESULTS_DIR="./results"
+CONFIGS_DIR="./configs"
+ERROR_LOG="./results/error_log.txt"
+
+HF_CACHE_ROOT="./hf_cache"
+
+# ---------------------------------------------------------
+# Local-only setup
+# ---------------------------------------------------------
+if [[ "$MODE" == "local" ]]; then
+    # Activate persistent virtualenv
+    if [ ! -d "$VENV_PATH" ]; then
+        echo "ERROR: Virtualenv not found at $VENV_PATH"
+        echo "Create it once with:"
+        echo "  python3 -m venv /workspace/venv"
+        exit 1
+    fi
+    source "$VENV_PATH/bin/activate"
+
+    # Cache locations (persistent, pod-safe)
+    export HF_HOME="$HF_CACHE_ROOT/hf_home"
+    export HF_HUB_CACHE="$HF_CACHE_ROOT/hub"
+    export TRANSFORMERS_CACHE="$HF_CACHE_ROOT/transformers"
+    export XDG_CACHE_HOME="$HF_CACHE_ROOT/xdg"
+    export VLLM_CACHE_DIR="$HF_CACHE_ROOT/vllm"
+    export TORCH_HOME="$HF_CACHE_ROOT/torch"
+
+    mkdir -p \
+        "$HF_HOME" \
+        "$HF_HUB_CACHE" \
+        "$TRANSFORMERS_CACHE" \
+        "$XDG_CACHE_HOME" \
+        "$VLLM_CACHE_DIR" \
+        "$TORCH_HOME"
+
+    # Ensure dependencies exist (only once per venv)
+    if ! python3 -c "import vllm" &>/dev/null; then
+        echo ">>> Installing vLLM and dependencies..."
+        pip install --upgrade pip
+        pip install vllm aiohttp numpy pandas tqdm huggingface_hub
+    fi
+
+    # Modern Hugging Face auth (non-deprecated)
+    if ! hf auth whoami &>/dev/null; then
+        hf auth login --token "$HF_TOKEN" --add-to-git-credential
+    fi
+
+    # Cleanup handler (local only)
+    cleanup() {
+        pkill -f vllm.entrypoints.openai.api_server || true
+    }
+    trap cleanup EXIT INT TERM
+fi
+
+# ---------------------------------------------------------
+# Common setup
+# ---------------------------------------------------------
+mkdir -p "$RESULTS_DIR" "$CONFIGS_DIR"
+touch "$ERROR_LOG"
 
 echo "======================================================="
 echo "   H100 BENCHMARK SUITE ($MODE)"
 echo "======================================================="
 
-# Helper for Local Execution
+# ---------------------------------------------------------
+# Model-specific max context
+# ---------------------------------------------------------
+get_max_len() {
+  case "$1" in
+    epfl-llm/meditron-70b) echo 4096 ;;
+    m42-health/Llama3-Med42-70B) echo 8192 ;;
+    m42-health/Llama3-Med42-8B) echo 8192 ;;
+    aaditya/Llama3-OpenBioLLM-70B) echo 8192 ;;
+    abacusai/Dracarys2-72B-Instruct) echo 16384 ;;
+    Qwen/Qwen2.5-72B-Instruct) echo 16384 ;;
+    meta-llama/Llama-3.3-70B-Instruct) echo 16384 ;;
+    deepseek-ai/DeepSeek-R1-Distill-Llama-70B) echo 16384 ;;
+    *) echo 8192 ;;
+  esac
+}
+
+# ---------------------------------------------------------
+# Local execution helper
+# ---------------------------------------------------------
 run_local() {
     local model=$1
     local tp=$2
@@ -76,91 +124,66 @@ run_local() {
     local timeout=$4
 
     echo ">>> [LOCAL] Starting vLLM for $model (TP=$tp)..."
-    
-    # 1. Start vLLM in background
-    # Note: We use nohup to prevent it dying if shell disconnects, 
-    # but we trap cleanup below.
-    # NCCL_P2P_LEVEL=NVL ensures NVLink usage on H100
+
+    export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((tp-1)))
+
     NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
-        --model $model \
-		--served-model-name "$model" \
-        --tensor-parallel-size $tp \
-        --max-model-len $(get_max_len "$model") \
+        --model "$model" \
+        --served-model-name "$model" \
+        --tensor-parallel-size "$tp" \
+        --max-model-len "$(get_max_len "$model")" \
         --trust-remote-code \
         --disable-log-requests \
         --gpu-memory-utilization 0.90 \
         --max-num-seqs 128 \
         --port 8000 > vllm.log 2>&1 &
-    
+
     SERVER_PID=$!
-    echo ">>> vLLM PID: $SERVER_PID. Logs in vllm.log"
+    echo ">>> vLLM PID: $SERVER_PID"
 
-    # 2. Wait for health (handled by client logic basically, but we do a loop here to be safe)
-    # The python client also has a health check, but we need to ensure the process actually started.
-    sleep 10
-    if ! ps -p $SERVER_PID > /dev/null; then
-        echo "!!! vLLM failed to start immediately. Check vllm.log"
-        cat vllm.log
-        return 1
-    fi
+    # Wait for readiness
+    for _ in {1..60}; do
+        if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
+            echo ">>> vLLM is responding"
+            break
+        fi
+        sleep 5
+    done
 
-    # 3. Run Benchmark Client
-    export MODEL_NAME=$model
-    export TEST_TYPE=$type
+    export MODEL_NAME="$model"
+    export TEST_TYPE="$type"
     export VLLM_BASE_URL="http://localhost:8000"
-    export RESULTS_DIR="./results"
-    export CONFIG_DIR="./configs"
-    
-    echo ">>> Starting Benchmarker Client..."
-    # We use 'timeout' on the client execution to enforce the time limit
-    timeout "${timeout}s" python3 client/benchmark_runner.py
-    CLIENT_STATUS=$?
-    
-    # 4. Cleanup
-    echo ">>> Stopping vLLM..."
-    kill $SERVER_PID
-    wait $SERVER_PID 2>/dev/null
+    export RESULTS_DIR
+    export CONFIG_DIR="$CONFIGS_DIR"
 
-    if [ $CLIENT_STATUS -eq 124 ]; then
-         echo "!!! TIMEOUT: Client exceeded ${timeout}s." | tee -a "$ERROR_LOG"
-    elif [ $CLIENT_STATUS -ne 0 ]; then
-         echo "!!! FAILURE: Client failed." | tee -a "$ERROR_LOG"
-    else
-         echo ">>> SUCCESS: Benchmark complete."
-    fi
+    echo ">>> Starting Benchmarker Client..."
+    timeout "${timeout}s" python3 client/benchmark_runner.py || true
+
+    echo ">>> Stopping vLLM..."
+    kill "$SERVER_PID"
+    wait "$SERVER_PID" 2>/dev/null || true
 }
 
-# Helper for Docker Execution
+# ---------------------------------------------------------
+# Docker execution helper
+# ---------------------------------------------------------
 run_docker() {
     local model=$1
     local tp=$2
     local type=$3
     local timeout=$4
 
-    export MODEL_NAME=$model
-    export TENSOR_PARALLEL_SIZE=$tp
-    export TEST_TYPE=$type
-    
+    export MODEL_NAME="$model"
+    export TENSOR_PARALLEL_SIZE="$tp"
+    export TEST_TYPE="$type"
+
     timeout "${timeout}s" docker compose up --build --abort-on-container-exit
     docker compose down
 }
 
-# Check Dependencies if Local
-if [[ "$MODE" == "local" ]]; then
-    if ! python3 -c "import vllm" &> /dev/null; then
-        echo ">>> Installing vLLM and dependencies..."
-        pip install --upgrade pip
-        pip install vllm aiohttp numpy pandas tqdm huggingface_hub
-    fi
-    # Ensure logged in for gated models
-    huggingface-cli login --token $HF_TOKEN
-fi
-
 # =========================================================
-# MODEL DEFINITIONS
-# =========================================================
-
 # PHASE 1: DIARIZATION
+# =========================================================
 DIARIZATION_MODELS=(
 #    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 #    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
@@ -180,7 +203,9 @@ for model in "${DIARIZATION_MODELS[@]}"; do
     sleep 5
 done
 
+# ---------------------------------------------------------
 # PHASE 2: CLINICAL NOTES
+# ---------------------------------------------------------
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
     "m42-health/Llama3-Med42-70B"
