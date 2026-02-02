@@ -113,9 +113,9 @@ DIARIZATION_SAMPLE = """
 00:00 [Speaker A]: So, about the pain...
 00:02 [Speaker B]: It hurts here.
 00:03 [Speaker A]: On the left side?
-00:04 [Unknown-1]: Yes.
+00:04 [Unknown]: Yes.
 00:05 [Speaker A]: Okay, take a deep breath.
-00:08 [Unknown-2]: Doctor, the X-rays are ready.
+00:08 [Unknown]: Doctor, the X-rays are ready.
 00:10 [Speaker A]: Thanks, just put them on the desk.
 00:12 [Speaker B]: Do I need to undress?
 """
@@ -124,19 +124,17 @@ DIARIZATION_SYSTEM_PROMPT = """
 You are a conversation analysis engine.
 
 Input:
-A transcript containing one or more segments labeled as [Unknown-1], [Unknown-2], etc.
+A transcript containing one or more segments labeled as [Unknown].
 
 Task:
-For EACH Unknown-X segment, independently infer the most likely speaker identity
+For EACH [Unknown] segment, independently infer the most likely speaker identity
 based on local context and turn-taking logic.
 
-Rules (must follow):
-- Treat each Unknown-X as a separate speaker instance.
-- Do NOT assume Unknown segments belong to the same person.
-- Classify each Unknown-X independently.
-- Each Unknown-X must appear exactly once in the output.
-- Do NOT merge Unknowns.
-- Do NOT include reasoning or explanations.
+Critical rules:
+- Do NOT assume that all [Unknown] segments belong to the same speaker.
+- Different [Unknown] segments MAY belong to different speakers.
+- Each [Unknown] segment must be classified independently.
+- Output one speaker label per [Unknown] segment.
 
 Speaker labels:
 - Speaker A — Doctor
@@ -144,11 +142,10 @@ Speaker labels:
 - Speaker C — Nurse / Assistant
 - Speaker D — Companion (guardian, parent, partner, child)
 
-Output format (JSON only):
+Output format (strict):
 {
   "segments": [
-    { "unknown": "Unknown-1", "timestamp": "...", "speaker": "..." },
-    { "unknown": "Unknown-2", "timestamp": "...", "speaker": "..." }
+    { "timestamp": "...", "speaker": "..." }
   ]
 }
 """

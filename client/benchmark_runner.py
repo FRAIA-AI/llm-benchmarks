@@ -29,10 +29,9 @@ WORKLOAD_FILE = os.path.join(CONFIG_DIR, "workloads.json")
 
 
 # =========================================================
-# Ensure workload config exists
+# Ensure workload config exists and is up to date
 # =========================================================
-if not os.path.exists(WORKLOAD_FILE):
-    generate_configs()
+generate_configs()
 
 with open(WORKLOAD_FILE, "r") as f:
     WORKLOADS = json.load(f)
