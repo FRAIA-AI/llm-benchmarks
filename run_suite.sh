@@ -83,6 +83,7 @@ run_local() {
     # NCCL_P2P_LEVEL=NVL ensures NVLink usage on H100
     NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
         --model $model \
+		--served-model-name "$model" \
         --tensor-parallel-size $tp \
         --max-model-len $(get_max_len "$model") \
         --trust-remote-code \
