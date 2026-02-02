@@ -188,9 +188,10 @@ async def main():
             "consistency": max(counts.values()) / sum(counts.values()) if counts else 0.0
         }
 
+    phase = os.getenv("PHASE_NAME", "default")
     os.makedirs(RESULTS_DIR, exist_ok=True)
     ts = int(time.time())
-    out_file = f"{RESULTS_DIR}/{TEST_TYPE}_{MODEL_NAME.replace('/', '_')}_{ts}.json"
+    out_file = f"{RESULTS_DIR}/{phase}_{MODEL_NAME.replace('/', '_')}_{ts}.json"
 
     with open(out_file, "w") as f:
         json.dump(result, f, indent=2)

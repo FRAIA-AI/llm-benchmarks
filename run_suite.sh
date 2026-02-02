@@ -202,6 +202,7 @@ run_docker() {
 # =========================================================
 # PHASE 1: DIARIZATION JUDGE
 # =========================================================
+export PHASE_NAME="diarization"
 DIARIZATION_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
@@ -225,6 +226,8 @@ done
 # =========================================================
 # PHASE 2: CLINICAL NOTES
 # =========================================================
+export PHASE_NAME="clinical_c4"
+
 CLINICAL_MODELS=(
     "m42-health/Llama3-Med42-70B"
     "m42-health/Llama3-Med42-8B"
@@ -249,11 +252,10 @@ done
 # =========================================================
 # PHASE 3: CLINICAL NOTES (HIGH CONCURRENCY)
 # =========================================================
-CLINICAL_CONCURRENT=8
-
 echo ">>> STARTING PHASE 3: CLINICAL DEEP DIVE (CONCURRENCY=$CLINICAL_CONCURRENT)"
 
-export CLINICAL_CONCURRENCY_OVERRIDE="$CLINICAL_CONCURRENT"
+export CLINICAL_CONCURRENCY_OVERRIDE="8"
+export PHASE_NAME="clinical_c8"
 
 CLINICAL_MODELS=(
     "m42-health/Llama3-Med42-70B"
@@ -265,6 +267,29 @@ for model in "${CLINICAL_MODELS[@]}"; do
         run_local "$model" 8 "clinical" 900
     else
         run_docker "$model" 8 "clinical" 900
+    fi
+    sleep 10
+done
+
+unset CLINICAL_CONCURRENCY_OVERRIDE
+
+# =========================================================
+# PHASE 4: CLINICAL NOTES (SingleGPU small model)
+# =========================================================
+echo ">>> STARTING PHASE 4: CLINICAL DEEP DIVE (CONCURRENCY=$CLINICAL_CONCURRENT)"
+
+export CLINICAL_CONCURRENCY_OVERRIDE="15"
+export PHASE_NAME="clinical_gpu1_c15"
+
+CLINICAL_MODELS=(
+    "m42-health/Llama3-Med42-8B"
+)
+
+for model in "${CLINICAL_MODELS[@]}"; do
+    if [[ "$MODE" == "local" ]]; then
+        run_local "$model" 1 "clinical" 900
+    else
+        run_docker "$model" 1 "clinical" 900
     fi
     sleep 10
 done
