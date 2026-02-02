@@ -1,2 +1,6 @@
 aiohttp
 numpy
+pandas
+tqdm
+vllm
+huggingface_hub

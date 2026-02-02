@@ -3,8 +3,8 @@
 import json
 import os
 
-# Use environment variable or default to internal container path
-CONFIG_PATH = os.getenv("CONFIG_DIR", "/app/configs")
+# Use environment variable or default to relative path for local execution
+CONFIG_PATH = os.getenv("CONFIG_DIR", "./configs")
 WORKLOAD_FILE = os.path.join(CONFIG_PATH, "workloads.json")
 
 os.makedirs(CONFIG_PATH, exist_ok=True)

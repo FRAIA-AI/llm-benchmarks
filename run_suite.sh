@@ -2,66 +2,131 @@
 
 # run_suite.sh
 
-# 1. Setup & Environment
+# 1. Setup & Checks
 if [ -f .env ]; then
   export $(echo $(cat .env | sed 's/#.*//g' | xargs) | envsubst)
 fi
 
 if [ -z "$HF_TOKEN" ]; then
-    echo "ERROR: HF_TOKEN is missing. Please create a .env file with your Hugging Face token."
+    echo "ERROR: HF_TOKEN is missing. Please create a .env file."
     exit 1
 fi
 
-# Ensure project directories exist on host with correct permissions
-# Using project-local paths for total control over write access
-mkdir -p ./results
-mkdir -p ./hf_cache
-mkdir -p ./configs
-
+RESULTS_DIR="./results"
+CACHE_DIR="./hf_cache"
+CONFIGS_DIR="./configs"
 ERROR_LOG="./results/error_log.txt"
+
+mkdir -p $RESULTS_DIR
+mkdir -p $CACHE_DIR
+mkdir -p $CONFIGS_DIR
 touch $ERROR_LOG
 
+MODE="docker"
+if [[ "$1" == "--local" ]]; then
+    MODE="local"
+    echo ">>> Running in LOCAL mode (Direct host execution)"
+else
+    echo ">>> Running in DOCKER mode"
+fi
+
 echo "======================================================="
-echo "   PEOPLES DOCTOR - H100 BENCHMARK SUITE"
-echo "======================================================="
-echo "Date:              $(date)"
-echo "Project Root:      $(pwd)"
-echo "Results Directory: ./results"
-echo "Model Cache:       ./hf_cache"
+echo "   H100 BENCHMARK SUITE ($MODE)"
 echo "======================================================="
 
-# Helper function for resilient execution
-execute_benchmark() {
+# Helper for Local Execution
+run_local() {
     local model=$1
     local tp=$2
     local type=$3
-    local timeout_val=$4
+    local timeout=$4
 
-    echo "----------------------------------------------------"
-    echo ">>> TESTING: $model ($type)"
-    echo "----------------------------------------------------"
+    echo ">>> [LOCAL] Starting vLLM for $model (TP=$tp)..."
     
+    # 1. Start vLLM in background
+    # Note: We use nohup to prevent it dying if shell disconnects, 
+    # but we trap cleanup below.
+    # NCCL_P2P_LEVEL=NVL ensures NVLink usage on H100
+    NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
+        --model $model \
+        --tensor-parallel-size $tp \
+        --max-model-len 16384 \
+        --trust-remote-code \
+        --disable-log-requests \
+        --gpu-memory-utilization 0.90 \
+        --max-num-seqs 128 \
+        --enforce-eager \
+        --port 8000 > vllm.log 2>&1 &
+    
+    SERVER_PID=$!
+    echo ">>> vLLM PID: $SERVER_PID. Logs in vllm.log"
+
+    # 2. Wait for health (handled by client logic basically, but we do a loop here to be safe)
+    # The python client also has a health check, but we need to ensure the process actually started.
+    sleep 10
+    if ! ps -p $SERVER_PID > /dev/null; then
+        echo "!!! vLLM failed to start immediately. Check vllm.log"
+        cat vllm.log
+        return 1
+    fi
+
+    # 3. Run Benchmark Client
+    export MODEL_NAME=$model
+    export TEST_TYPE=$type
+    export VLLM_BASE_URL="http://localhost:8000"
+    export RESULTS_DIR="./results"
+    export CONFIG_DIR="./configs"
+    
+    echo ">>> Starting Benchmarker Client..."
+    # We use 'timeout' on the client execution to enforce the time limit
+    timeout "${timeout}s" python3 client/benchmark_runner.py
+    CLIENT_STATUS=$?
+    
+    # 4. Cleanup
+    echo ">>> Stopping vLLM..."
+    kill $SERVER_PID
+    wait $SERVER_PID 2>/dev/null
+
+    if [ $CLIENT_STATUS -eq 124 ]; then
+         echo "!!! TIMEOUT: Client exceeded ${timeout}s." | tee -a "$ERROR_LOG"
+    elif [ $CLIENT_STATUS -ne 0 ]; then
+         echo "!!! FAILURE: Client failed." | tee -a "$ERROR_LOG"
+    else
+         echo ">>> SUCCESS: Benchmark complete."
+    fi
+}
+
+# Helper for Docker Execution
+run_docker() {
+    local model=$1
+    local tp=$2
+    local type=$3
+    local timeout=$4
+
     export MODEL_NAME=$model
     export TENSOR_PARALLEL_SIZE=$tp
     export TEST_TYPE=$type
     
-    # Run with timeout and capture exit status
-    timeout "${timeout_val}s" docker compose up --build --abort-on-container-exit
-    local status=$?
-
-    if [ $status -eq 124 ]; then
-        echo "!!! TIMEOUT: $model exceeded ${timeout_val}s. Skipping..." | tee -a "$ERROR_LOG"
-    elif [ $status -ne 0 ]; then
-        echo "!!! FAILURE: $model failed with exit code $status. Skipping..." | tee -a "$ERROR_LOG"
-    else
-        echo ">>> SUCCESS: $model completed."
-    fi
-    
-    # Force container removal and VRAM release
+    timeout "${timeout}s" docker compose up --build --abort-on-container-exit
     docker compose down
 }
 
-# --- PHASE 1: DIARIZATION JUDGE (Small Models) ---
+# Check Dependencies if Local
+if [[ "$MODE" == "local" ]]; then
+    if ! python3 -c "import vllm" &> /dev/null; then
+        echo ">>> Installing vLLM and dependencies..."
+        pip install --upgrade pip
+        pip install vllm aiohttp numpy pandas tqdm huggingface_hub
+    fi
+    # Ensure logged in for gated models
+    huggingface-cli login --token $HF_TOKEN
+fi
+
+# =========================================================
+# MODEL DEFINITIONS
+# =========================================================
+
+# PHASE 1: DIARIZATION
 DIARIZATION_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
@@ -72,12 +137,17 @@ DIARIZATION_MODELS=(
 )
 
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"
+
 for model in "${DIARIZATION_MODELS[@]}"; do
-    execute_benchmark "$model" 1 "diarization" 480
+    if [[ "$MODE" == "local" ]]; then
+        run_local "$model" 1 "diarization" 480
+    else
+        run_docker "$model" 1 "diarization" 480
+    fi
     sleep 5
 done
 
-# --- PHASE 2: CLINICAL NOTES (Large/Medical Models) ---
+# PHASE 2: CLINICAL NOTES
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
     "clinical-llama/Clinical-Llama-3-70B"
@@ -90,14 +160,19 @@ CLINICAL_MODELS=(
 )
 
 echo ">>> STARTING PHASE 2: CLINICAL DEEP DIVE"
+
 for model in "${CLINICAL_MODELS[@]}"; do
-    execute_benchmark "$model" 8 "clinical" 900
+    if [[ "$MODE" == "local" ]]; then
+        run_local "$model" 8 "clinical" 900
+    else
+        run_docker "$model" 8 "clinical" 900
+    fi
     sleep 10
 done
 
 echo "======================================================="
-echo "   BENCHMARK COMPLETE - COMPRESSING RESULTS"
+echo "   BENCHMARK COMPLETE"
 echo "======================================================="
 
-tar -czf benchmark_results.tar.gz results/
+tar -czf benchmark_results.tar.gz results/ vllm.log
 echo ">>> Results saved to benchmark_results.tar.gz"

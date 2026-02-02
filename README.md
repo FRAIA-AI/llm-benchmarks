@@ -1,54 +1,32 @@
-# PeoplesDoctor H100 Benchmark Suite
+# H100 Benchmark Suite
 
-Standardized performance evaluation for 8x H100 GPU clusters, focusing on medical reasoning and conversational logic.
+Standardized performance evaluation for 8x H100/A100 GPU clusters.
 
-## Project Structure
-- `client/`: Python benchmark engine and data generators.
-- `hf_cache/`: Local model weight storage (created on first run).
-- `results/`: JSON performance reports and error logs.
-- `configs/`: Generated workload parameters.
+## Modes of Operation
 
-## Setup Instructions
+1.  **Docker Mode (Default):** Uses `docker-compose`. Requires Docker-in-Docker support.
+2.  **Local Mode (`--local`):** Runs directly on the host. Required several packages to be installed.
 
-1.  **Environment:**
-    Create a `.env` file in the root directory:
-    ```ini
-    HF_TOKEN=hf_your_token_here
+## Setup (RunPod)
+
+1.  **Clone this repository** to your Pod.
+2.  **Configure Environment:**
+    ```bash
+    cp .env.example .env
+    # Edit .env with your HF_TOKEN
     ```
-
-2.  **Permissions:**
-    Ensure the project directory is writable by your user (Docker will map these to the container):
+3.  **Run Benchmark:**
+    Run inside a `tmux` session as this takes ~2 hours.
+    
     ```bash
     chmod +x run_suite.sh
+    ./run_suite.sh --local
     ```
+    *The script will automatically install vLLM and dependencies on the first run.*
 
-3.  **Execution:**
-    Run the suite in a persistent background session:
-    ```bash
-    screen -S benchmark
-    ./run_suite.sh
-    ```
+## Output
+Results are saved in `benchmark_results.tar.gz`.
 
-## Benchmarked Tasks
-
-### 1. Diarization Judge (Small Models)
-- **Objective:** Semantic speaker identification using short-context logic.
-- **Payload:** Messy transcripts with unknown labels.
-- **Metric:** Tokens per second at high concurrency (64).
-
-### 2. Clinical Deep Dive (Large Models)
-- **Objective:** High-accuracy SOAP note generation.
-- **Payload:** 16k context including EHR history and 15-minute consultation transcripts.
-- **Metric:** TTFT (Prefill) and TPOT (Decoding) latencies.
-
-## Troubleshooting
-
-**VRAM Cleanup:**
-If a process is interrupted, the GPUs may remain locked. Use:
-```bash
-docker compose down
-sudo fuser -v /dev/nvidia*
-```
-
-**vLLM Loading Issues:**
-Check `results/error_log.txt`. Most failures are due to `HF_TOKEN` lacking permissions for gated models (Llama 3.1/3.3).
+## Workloads
+*   **Diarization:** Small models (7-14B), High concurrency.
+*   **Clinical Notes:** Large models (70B+), Long context (16k), Medical accuracy.
