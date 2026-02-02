@@ -7,6 +7,14 @@ if [ -f .env ]; then
   export $(echo $(cat .env | sed 's/#.*//g' | xargs) | envsubst)
 fi
 
+# Enforce cache dirs for all subprocesses
+export HF_HOME
+export HF_HUB_CACHE
+export TRANSFORMERS_CACHE
+export XDG_CACHE_HOME
+export VLLM_CACHE_DIR
+export TORCH_HOME
+
 if [ -z "$HF_TOKEN" ]; then
     echo "ERROR: HF_TOKEN is missing. Please create a .env file."
     exit 1
