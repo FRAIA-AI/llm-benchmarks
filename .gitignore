@@ -1,0 +1,14 @@
+# Virtual environment
+venv/
+.venv/
+
+
+# Local environment settings
+.env
+.env.local
+.env.*.local
+
+
+# Local files
+results/
+configs/
