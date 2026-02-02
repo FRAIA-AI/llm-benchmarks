@@ -31,28 +31,24 @@ fi
 # ---------------------------------------------------------
 # Paths
 # ---------------------------------------------------------
-VENV_PATH="/workspace/venv"
-
+VENV_PATH="./venv"
 RESULTS_DIR="./results"
 CONFIGS_DIR="./configs"
 ERROR_LOG="./results/error_log.txt"
-
 HF_CACHE_ROOT="./hf_cache"
 
 # ---------------------------------------------------------
 # Local-only setup
 # ---------------------------------------------------------
 if [[ "$MODE" == "local" ]]; then
-    # Activate persistent virtualenv
     if [ ! -d "$VENV_PATH" ]; then
         echo "ERROR: Virtualenv not found at $VENV_PATH"
         echo "Create it once with:"
-        echo "  python3 -m venv /workspace/venv"
+        echo "  python3 -m venv ./venv"
         exit 1
     fi
     source "$VENV_PATH/bin/activate"
 
-    # Cache locations (persistent, pod-safe)
     export HF_HOME="$HF_CACHE_ROOT/hf_home"
     export HF_HUB_CACHE="$HF_CACHE_ROOT/hub"
     export TRANSFORMERS_CACHE="$HF_CACHE_ROOT/transformers"
@@ -68,19 +64,16 @@ if [[ "$MODE" == "local" ]]; then
         "$VLLM_CACHE_DIR" \
         "$TORCH_HOME"
 
-    # Ensure dependencies exist (only once per venv)
     if ! python3 -c "import vllm" &>/dev/null; then
         echo ">>> Installing vLLM and dependencies..."
         pip install --upgrade pip
         pip install vllm aiohttp numpy pandas tqdm huggingface_hub
     fi
 
-    # Modern Hugging Face auth (non-deprecated)
     if ! hf auth whoami &>/dev/null; then
         hf auth login --token "$HF_TOKEN" --add-to-git-credential
     fi
 
-    # Cleanup handler (local only)
     cleanup() {
         pkill -f vllm.entrypoints.openai.api_server || true
     }
@@ -115,6 +108,20 @@ get_max_len() {
 }
 
 # ---------------------------------------------------------
+# Model capability: chat vs completion
+# ---------------------------------------------------------
+get_model_mode() {
+  case "$1" in
+    epfl-llm/meditron-70b)
+      echo "completion"
+      ;;
+    *)
+      echo "chat"
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------
 # Local execution helper
 # ---------------------------------------------------------
 run_local() {
@@ -123,7 +130,10 @@ run_local() {
     local type=$3
     local timeout=$4
 
-    echo ">>> [LOCAL] Starting vLLM for $model (TP=$tp)..."
+    export MODEL_MODE
+    MODEL_MODE="$(get_model_mode "$model")"
+
+    echo ">>> [LOCAL] Starting vLLM for $model (TP=$tp, MODE=$MODEL_MODE)..."
 
     export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((tp-1)))
 
@@ -141,7 +151,7 @@ run_local() {
     SERVER_PID=$!
     echo ">>> vLLM PID: $SERVER_PID"
 
-    # Wait for readiness
+    READY=false
     for _ in {1..60}; do
         if curl -s http://localhost:8000/v1/models >/dev/null 2>&1; then
             READY=true
@@ -174,7 +184,7 @@ run_local() {
 }
 
 # ---------------------------------------------------------
-# Docker execution helper
+# Docker execution helper (unchanged)
 # ---------------------------------------------------------
 run_docker() {
     local model=$1
@@ -191,7 +201,7 @@ run_docker() {
 }
 
 # =========================================================
-# PHASE 1: DIARIZATION
+# PHASE 1: DIARIZATION (INTACT)
 # =========================================================
 DIARIZATION_MODELS=(
 #    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
@@ -212,9 +222,9 @@ for model in "${DIARIZATION_MODELS[@]}"; do
     sleep 5
 done
 
-# ---------------------------------------------------------
+# =========================================================
 # PHASE 2: CLINICAL NOTES
-# ---------------------------------------------------------
+# =========================================================
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
     "m42-health/Llama3-Med42-70B"

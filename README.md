@@ -1,118 +1,76 @@
 # H100 Benchmark Suite
 
-Standardized performance evaluation for 8× NVIDIA H100 / A100 GPU clusters using vLLM.
+Standardized performance evaluation for **8× NVIDIA H100 / A100 GPU clusters** using **vLLM**.
 
-This suite benchmarks **real-world LLM inference workloads**, with a strong focus on:
-- High-concurrency diarization-style inference
-- Long-context clinical note generation
-- Token-level latency and throughput metrics
-- Per-GPU efficiency on multi-H100 systems
+This suite benchmarks **real-world LLM inference workloads**, focusing on:
 
-It is designed to run reliably on **RunPod** and similar GPU providers.
+- High-concurrency diarization-style inference  
+- Long-context clinical note generation  
+- Token-level latency and throughput metrics  
+- Per-GPU efficiency on multi-H100 systems  
 
 ---
 
 ## Modes of Operation
 
-### Docker Mode (default)
-- Uses docker compose
-- Requires Docker-in-Docker support
-- Not recommended for RunPod unless preconfigured
+The benchmark suite supports **two fully separate execution modes**.
 
-### Local Mode (`--local`) — Recommended
+---
+
+## Docker Mode (default)
+
+**Intended use**
+- CI environments
+- Preconfigured Docker setups
+- Non-RunPod systems
+
+**Characteristics**
+- Uses `docker compose`
+- Requires Docker-in-Docker support
+- Dependencies are installed inside containers
+- Slower cold starts
+- Not recommended on RunPod unless already set up
+
+**How to run**
+```bash
+./run_suite.sh
+```
+
+---
+
+## Local Mode (`--local`) — Recommended for RunPod
+
+**Intended use**
+- RunPod
+- Bare-metal GPU nodes
+- Long-running benchmark sessions
+
+**Characteristics**
 - Runs directly on the host container
 - Uses a **persistent Python virtual environment**
+- Automatically activates the venv
+- Uses persistent cache directories
 - Avoids reinstalling dependencies after pod restarts
+- Best performance and stability
 
----
-
-## RunPod Storage Model (Critical)
-
-RunPod provides two storage layers:
-
-| Location | Persistence |
-|--------|-------------|
-| Container filesystem (`/root`, `/usr/local`) | Ephemeral (wiped on stop) |
-| Volume disk (`/workspace`) | Persistent |
-
-**All important data must live under `/workspace`.**
-
-This includes:
-- Python virtualenv
-- Hugging Face caches
-- vLLM caches
-- Model downloads
-- Benchmark results
-
----
-
-## One-Time Setup (RunPod)
-
-### 1. Clone the repository into the persistent volume
-
+**How to run**
 ```bash
-cd /workspace
-git clone <your-repo-url> llm-benchmarks
-cd llm-benchmarks
+./run_suite.sh --local
 ```
 
----
-
-### 2. Create a persistent Python virtualenv (ONE TIME)
-
-```bash
-cd /workspace
-python3 -m venv venv
-```
-
-This creates:
-
-```
-/workspace/venv
-```
-
-The virtualenv **survives pod restarts**.
-
----
-
-### 3. Activate the virtualenv
-
-```bash
-source /workspace/venv/bin/activate
-```
-
-You should see:
-
-```
-(venv) root@...
-```
-
----
-
-### 4. Install Python dependencies (ONE TIME)
-
-```bash
-pip install --upgrade pip
-pip install \
-  vllm \
-  transformers \
-  huggingface_hub \
-  accelerate \
-  aiohttp \
-  numpy \
-  pandas \
-  tqdm
-```
-
-After this, **no pip installs are needed again** unless you change dependencies.
+You do **not** need to activate the virtualenv manually —  
+this is handled entirely by `run_suite.sh`.
 
 ---
 
 ## Hugging Face Authentication (Required)
 
-Most clinical and LLaMA-based models are gated.
+Most clinical and LLaMA-based models are **gated**.  
+Authentication is required in **both Docker and Local modes**.
 
 ### 1. Create a `.env` file
+
+From the repository root:
 
 ```bash
 cd /workspace/llm-benchmarks
@@ -122,15 +80,19 @@ nano .env
 Add:
 
 ```env
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxx
+HF_TOKEN=your_huggingface_token_here
 ```
+
+That is **all you need to provide**.
 
 ---
 
-### 2. Login once using the Hugging Face CLI
+### 2. Login once (Local Mode only)
+
+When running in `--local` mode, the script uses the modern Hugging Face CLI:
 
 ```bash
-huggingface-cli login --token $HF_TOKEN
+hf auth login --token $HF_TOKEN
 ```
 
 This enables access to:
@@ -138,13 +100,15 @@ This enables access to:
 - Med42
 - Clinical fine-tuned models
 
+This only needs to be done **once per pod**.
+
 ---
 
-## Cache Configuration (Mandatory)
+## Cache & Persistence (Local Mode)
 
-The benchmark enforces **persistent cache directories** so models and kernels are reused.
+In **Local mode**, the script automatically configures **persistent cache directories**.
 
-The following environment variables are set by `run_suite.sh`:
+The following environment variables are set internally by `run_suite.sh`:
 
 ```
 HF_HOME
@@ -155,44 +119,19 @@ VLLM_CACHE_DIR
 TORCH_HOME
 ```
 
-All of them point to subdirectories under:
+All caches live under:
 
 ```
-/workspace/llm-benchmarks/
+/workspace/llm-benchmarks/.cache/
 ```
 
-This prevents:
-- Disk exhaustion
-- Redownloading models
-- Rebuilding kernels on restart
+This ensures:
+- Models are not re-downloaded
+- CUDA kernels are reused
+- Disk usage stays predictable
+- Pod restarts are fast
 
----
-
-## Running the Benchmark Suite
-
-### Always activate the virtualenv first
-
-```bash
-source /workspace/venv/bin/activate
-```
-
----
-
-### Run in LOCAL mode (recommended)
-
-```bash
-./run_suite.sh --local
-```
-
-What this does:
-- Launches vLLM directly on the host
-- Uses tensor parallelism for multi-GPU models
-- Runs benchmarks sequentially
-- Saves detailed per-model JSON reports
-
-IMPORTANT:
-- Run inside `tmux` or `screen`
-- Full runs may take 1–2 hours on 8× H100
+Docker mode does **not** use these persistent caches.
 
 ---
 
@@ -208,7 +147,9 @@ IMPORTANT:
 - Large models (70B+)
 - Long context
 - Structured clinical note generation
-- Latency and token efficiency focused
+- Latency and token-efficiency focused
+
+Phases can be enabled or disabled by commenting models in `run_suite.sh`.
 
 ---
 
@@ -224,7 +165,8 @@ results/
 └── benchmark_results.tar.gz
 ```
 
-Each JSON result includes:
+Each JSON report contains:
+
 - Total requests
 - Successful / failed requests
 - Total runtime
@@ -238,17 +180,17 @@ Each JSON result includes:
 
 ---
 
-## Fast Restart Workflow (After Pod Stop)
+## Fast Restart Workflow (RunPod)
 
-When restarting the pod:
+After stopping and restarting a pod:
 
 ```bash
 cd /workspace/llm-benchmarks
 ./run_suite.sh --local
 ```
 
-No reinstall required:
+No manual steps required:
+- Virtualenv persists
 - Python packages persist
 - Models persist
 - Caches persist
-

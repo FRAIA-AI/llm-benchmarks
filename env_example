@@ -1,0 +1,7 @@
+HF_TOKEN=your_huggingface_token_here
+HF_HOME=/workspace/llm-benchmarks/.cache/huggingface
+HF_HUB_CACHE=/workspace/llm-benchmarks/.cache/huggingface
+TRANSFORMERS_CACHE=/workspace/llm-benchmarks/.cache/huggingface
+XDG_CACHE_HOME=/workspace/llm-benchmarks/.cache
+VLLM_CACHE_DIR=/workspace/llm-benchmarks/.cache/vllm
+TORCH_HOME=/workspace/llm-benchmarks/.cache/torch
