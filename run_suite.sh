@@ -55,7 +55,6 @@ run_local() {
         --disable-log-requests \
         --gpu-memory-utilization 0.90 \
         --max-num-seqs 128 \
-        --enforce-eager \
         --port 8000 > vllm.log 2>&1 &
     
     SERVER_PID=$!
