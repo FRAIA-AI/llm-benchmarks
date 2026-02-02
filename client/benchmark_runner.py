@@ -1,234 +1,194 @@
 import os
 import json
 import time
+import math
 import asyncio
 import aiohttp
-import numpy as np
 from collections import Counter
-from typing import List, Dict
+from typing import Dict, Any
+
+from generate_data import generate_configs
+
 
 # =========================================================
 # Environment
 # =========================================================
-
 MODEL_NAME = os.environ["MODEL_NAME"]
 MODEL_MODE = os.environ.get("MODEL_MODE", "chat")  # chat | completion
 TEST_TYPE = os.environ["TEST_TYPE"]               # diarization | clinical
-VLLM_BASE_URL = os.environ["VLLM_BASE_URL"]
-RESULTS_DIR = os.environ["RESULTS_DIR"]
-CONFIG_DIR = os.environ["CONFIG_DIR"]
+BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
+RESULTS_DIR = os.environ.get("RESULTS_DIR", "./results")
 
-CONCURRENCY = 4
-REQUESTS = 20
-
-# Diarization labels (fixed universe)
-DIARIZATION_LABELS = ["Patient", "Doctor"]
-
-# =========================================================
-# Prompt builders
-# =========================================================
-
-def build_diarization_prompt(text: str) -> str:
-    return f"""Task: Speaker identification.
-
-Identify who is speaking in the transcript below.
-Respond with ONLY ONE label.
-
-Possible speakers:
-- Patient
-- Doctor
-
-Transcript:
-{text}
-
-Speaker:
-""".strip()
-
-
-def build_clinical_prompt(text: str) -> str:
-    return f"""You are a clinical language model.
-
-Create a structured clinical note from the following transcript.
-
-Transcript:
-{text}
-
-Clinical Note:
-""".strip()
+API_URL = f"{BASE_URL}/v1/chat/completions" if MODEL_MODE == "chat" else f"{BASE_URL}/v1/completions"
 
 
 # =========================================================
-# Request payloads
+# Load workload config (SINGLE SOURCE OF TRUTH)
 # =========================================================
+WORKLOADS = generate_configs()
+CONFIG = WORKLOADS[TEST_TYPE]
 
-def build_payload(prompt: str) -> Dict:
-    if MODEL_MODE == "chat":
-        return {
-            "model": MODEL_NAME,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.0 if TEST_TYPE == "diarization" else 0.7,
-            "max_tokens": 8 if TEST_TYPE == "diarization" else 1024,
-        }
-    else:
-        return {
-            "model": MODEL_NAME,
-            "prompt": prompt,
-            "temperature": 0.0 if TEST_TYPE == "diarization" else 0.7,
-            "max_tokens": 8 if TEST_TYPE == "diarization" else 1024,
-        }
+SYSTEM_PROMPT = CONFIG["system_prompt"]
+USER_PROMPT = CONFIG["user_prompt"]
+MAX_TOKENS = CONFIG["max_tokens"]
+TEMPERATURE = CONFIG["temperature"]
+CONCURRENCY = CONFIG["concurrency"]
+REQUESTS_COUNT = CONFIG["requests_count"]
 
 
 # =========================================================
-# Sample generation
+# Helpers
 # =========================================================
-
-def generate_samples() -> List[str]:
-    if TEST_TYPE == "diarization":
-        return [
-            "Yes doctor, the pain started yesterday and worsens when I walk.",
-            "Can you describe where exactly the pain is located?",
-            "It feels like pressure in the middle of my chest.",
-            "Do you feel short of breath when climbing stairs?",
-            "Yes, slightly."
-        ] * (REQUESTS // 5)
-    else:
-        return [
-            f"Patient reports chest pain for the last {d} days, worse on exertion, with mild shortness of breath."
-            for d in range(1, REQUESTS + 1)
-        ]
-
-
-# =========================================================
-# HTTP call
-# =========================================================
-
-async def call_model(session, payload):
-    url = f"{VLLM_BASE_URL}/v1/chat/completions" if MODEL_MODE == "chat" else f"{VLLM_BASE_URL}/v1/completions"
-    start = time.time()
-    async with session.post(url, json=payload) as resp:
-        data = await resp.json()
-    latency = time.time() - start
-    return data, latency
-
-
-# =========================================================
-# Metrics
-# =========================================================
-
 def entropy(counter: Counter) -> float:
     total = sum(counter.values())
     if total == 0:
         return 0.0
-    probs = [v / total for v in counter.values()]
-    return -sum(p * np.log2(p) for p in probs)
+    return -sum((c / total) * math.log2(c / total) for c in counter.values())
+
+
+def normalize_label(text: str) -> str:
+    return text.strip().split()[0].replace(".", "").replace(",", "")
 
 
 # =========================================================
-# Benchmark runner
+# Request Builder
 # =========================================================
+def build_payload() -> Dict[str, Any]:
+    if MODEL_MODE == "chat":
+        return {
+            "model": MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_PROMPT},
+            ],
+            "max_tokens": MAX_TOKENS,
+            "temperature": TEMPERATURE,
+        }
+    else:
+        return {
+            "model": MODEL_NAME,
+            "prompt": SYSTEM_PROMPT + "\n\n" + USER_PROMPT,
+            "max_tokens": MAX_TOKENS,
+            "temperature": TEMPERATURE,
+        }
 
-async def run_benchmark():
-    samples = generate_samples()
 
-    latencies = []
-    tokens_in = 0
-    tokens_out = 0
-    outputs = []
-    diarization_labels = []
+# =========================================================
+# Async worker
+# =========================================================
+async def run_request(session: aiohttp.ClientSession, sem: asyncio.Semaphore, stats: dict):
+    async with sem:
+        start = time.perf_counter()
+        try:
+            async with session.post(API_URL, json=build_payload(), timeout=300) as resp:
+                data = await resp.json()
+                latency = time.perf_counter() - start
 
-    connector = aiohttp.TCPConnector(limit=CONCURRENCY)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        sem = asyncio.Semaphore(CONCURRENCY)
+                if MODEL_MODE == "chat":
+                    output = data["choices"][0]["message"]["content"]
+                else:
+                    output = data["choices"][0]["text"]
 
-        async def run_one(sample):
-            nonlocal tokens_in, tokens_out
+                stats["samples"].append({
+                    "prompt": USER_PROMPT,
+                    "output": output
+                })
 
-            if TEST_TYPE == "diarization":
-                prompt = build_diarization_prompt(sample)
-            else:
-                prompt = build_clinical_prompt(sample)
+                stats["latencies"].append(latency)
+                stats["successful"] += 1
+                stats["tokens_in"] += data.get("usage", {}).get("prompt_tokens", 0)
+                stats["tokens_out"] += data.get("usage", {}).get("completion_tokens", 0)
 
-            payload = build_payload(prompt)
+        except Exception as e:
+            stats["failed"] += 1
+            stats["errors"].append(str(e))
 
-            async with sem:
-                result, latency = await call_model(session, payload)
 
-            latencies.append(latency)
+# =========================================================
+# Main runner
+# =========================================================
+async def main():
+    sem = asyncio.Semaphore(CONCURRENCY)
 
-            if MODEL_MODE == "chat":
-                content = result["choices"][0]["message"]["content"]
-            else:
-                content = result["choices"][0]["text"]
-
-            outputs.append({
-                "prompt": prompt,
-                "output": content
-            })
-
-            tokens_in += len(prompt.split())
-            tokens_out += len(content.split())
-
-            if TEST_TYPE == "diarization":
-                label = content.strip().split()[0]
-                diarization_labels.append(label)
-
-        start = time.time()
-        await asyncio.gather(*(run_one(s) for s in samples))
-        total_duration = time.time() - start
-
-    # =====================================================
-    # Aggregate metrics
-    # =====================================================
-
-    report = {
+    stats = {
         "model": MODEL_NAME,
         "model_mode": MODEL_MODE,
         "test_type": TEST_TYPE,
-        "total_requests": REQUESTS,
-        "successful": REQUESTS,
+        "total_requests": REQUESTS_COUNT,
+        "successful": 0,
         "failed": 0,
-        "total_duration_sec": total_duration,
-        "avg_latency_sec": float(np.mean(latencies)),
-        "p95_latency_ms": float(np.percentile(latencies, 95) * 1000),
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "throughput_tokens_per_sec": tokens_out / total_duration if total_duration > 0 else 0,
-        "tokens_per_gpu_per_sec": (tokens_out / total_duration) / int(os.environ.get("TP_SIZE", 1)),
-        "samples": outputs[:3],
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latencies": [],
+        "samples": [],
         "errors": [],
-        "status": "OK"
+    }
+
+    start_time = time.perf_counter()
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            run_request(session, sem, stats)
+            for _ in range(REQUESTS_COUNT)
+        ]
+        await asyncio.gather(*tasks)
+
+    total_duration = time.perf_counter() - start_time
+
+    # =====================================================
+    # Metrics
+    # =====================================================
+    latencies = stats["latencies"]
+    latencies_sorted = sorted(latencies)
+
+    result = {
+        "model": MODEL_NAME,
+        "model_mode": MODEL_MODE,
+        "test_type": TEST_TYPE,
+        "total_requests": REQUESTS_COUNT,
+        "successful": stats["successful"],
+        "failed": stats["failed"],
+        "total_duration_sec": total_duration,
+        "avg_latency_sec": sum(latencies) / len(latencies) if latencies else 0.0,
+        "p95_latency_ms": latencies_sorted[int(0.95 * len(latencies))] * 1000 if latencies else 0.0,
+        "tokens_in": stats["tokens_in"],
+        "tokens_out": stats["tokens_out"],
+        "throughput_tokens_per_sec": stats["tokens_out"] / total_duration if total_duration > 0 else 0.0,
+        "tokens_per_gpu_per_sec": stats["tokens_out"] / total_duration if total_duration > 0 else 0.0,
+        "samples": stats["samples"],
+        "errors": stats["errors"],
+        "status": "OK" if stats["failed"] == 0 else "PARTIAL",
     }
 
     # =====================================================
     # Diarization-specific metrics
     # =====================================================
-
     if TEST_TYPE == "diarization":
-        counter = Counter(diarization_labels)
-        report["diarization"] = {
-            "label_distribution": dict(counter),
-            "entropy": entropy(counter),
-            "consistency": max(counter.values()) / sum(counter.values()) if counter else 0.0
+        labels = [normalize_label(s["output"]) for s in stats["samples"]]
+        label_counts = Counter(labels)
+
+        result["diarization"] = {
+            "label_distribution": dict(label_counts),
+            "entropy": entropy(label_counts),
+            "consistency": max(label_counts.values()) / sum(label_counts.values()) if label_counts else 0.0
         }
 
     # =====================================================
-    # Save
+    # Save report
     # =====================================================
-
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     ts = int(time.time())
-    fname = f"{RESULTS_DIR}/{TEST_TYPE}_{MODEL_NAME.replace('/', '_')}_{ts}.json"
-    with open(fname, "w") as f:
-        json.dump(report, f, indent=2)
+    out_file = f"{RESULTS_DIR}/{TEST_TYPE}_{MODEL_NAME.replace('/', '_')}_{ts}.json"
 
-    print(f">>> Report saved: {fname}")
-    print(json.dumps(report, indent=2))
+    with open(out_file, "w") as f:
+        json.dump(result, f, indent=2)
+
+    print(f">>> Report saved: {out_file}")
+    print(json.dumps(result, indent=2))
 
 
 # =========================================================
-# Entry
+# Entrypoint
 # =========================================================
-
 if __name__ == "__main__":
-    asyncio.run(run_benchmark())
+    asyncio.run(main())
