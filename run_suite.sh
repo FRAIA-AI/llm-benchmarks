@@ -13,19 +13,24 @@ if [ -z "$HF_TOKEN" ]; then
 fi
 
 RESULTS_DIR="./results"
+CACHE_DIR="./hf_cache"
+CONFIGS_DIR="./configs"
+
+# Ensure all host directories exist before Docker starts to prevent root-ownership issues
 mkdir -p $RESULTS_DIR
+mkdir -p $CACHE_DIR
+mkdir -p $CONFIGS_DIR
 
 echo "======================================================="
 echo "   PEOPLES DOCTOR - H100 BENCHMARK SUITE"
 echo "======================================================="
 echo "Date: $(date)"
 echo "Output Directory: $RESULTS_DIR"
+echo "Cache Directory: $CACHE_DIR"
 echo "======================================================="
 
 # -----------------------------------------------------------------------------
 # PHASE 1: DIARIZATION JUDGE (Small/Medium Models)
-# Workload: Short Context, Logic Heavy, High Concurrency
-# Time Allocation: ~30 Minutes
 # -----------------------------------------------------------------------------
 
 DIARIZATION_MODELS=(
@@ -52,15 +57,13 @@ for model in "${DIARIZATION_MODELS[@]}"; do
     # Run Benchmark (Timeout: 6 minutes)
     timeout 360s docker compose up --build --abort-on-container-exit
     
-    # Cleanup to free VRAM
+    echo ">>> Cooling down..."
     docker compose down
     sleep 5
 done
 
 # -----------------------------------------------------------------------------
 # PHASE 2: CLINICAL NOTES (Large/Medical Models)
-# Workload: Long Context (16k), Medical Reasoning, Low Concurrency
-# Time Allocation: ~80 Minutes
 # -----------------------------------------------------------------------------
 
 CLINICAL_MODELS=(
@@ -89,7 +92,7 @@ for model in "${CLINICAL_MODELS[@]}"; do
     export TENSOR_PARALLEL_SIZE=8 
     export TEST_TYPE="clinical"
     
-    # Run Benchmark (Timeout: 11 minutes - allows for longer load times)
+    # Run Benchmark (Timeout: 10 minutes - allows for longer load times)
     timeout 650s docker compose up --build --abort-on-container-exit
     
     # Force Cleanup

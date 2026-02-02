@@ -3,8 +3,11 @@
 import json
 import os
 
-# Ensure configs directory exists
-os.makedirs("/app/configs", exist_ok=True)
+# Use environment variable or default to internal container path
+CONFIG_PATH = os.getenv("CONFIG_DIR", "/app/configs")
+WORKLOAD_FILE = os.path.join(CONFIG_PATH, "workloads.json")
+
+os.makedirs(CONFIG_PATH, exist_ok=True)
 
 # -------------------------------------------------------------------------
 # PART 1: CLINICAL CONTEXT & TRANSCRIPT (The "Heavy" Payload)
@@ -135,24 +138,23 @@ def generate_configs():
             "user_prompt": DIARIZATION_SAMPLE,
             "max_tokens": 512,
             "temperature": 0.1,
-            "concurrency": 64,
+            "concurrency": 64,   # High concurrency to stress throughput
             "requests_count": 200
         },
         "clinical": {
             "system_prompt": CLINICAL_SYSTEM_PROMPT,
             "user_prompt": clinical_input,
-            "max_tokens": 1500,
+            "max_tokens": 1500,  # Long generation for SOAP notes
             "temperature": 0.2,
-            "concurrency": 4,
+            "concurrency": 4,    # Low concurrency to simulate heavy single-user load
             "requests_count": 20
         }
     }
 
-    with open("/app/configs/workloads.json", "w") as f:
+    with open(WORKLOAD_FILE, "w") as f:
         json.dump(workloads, f, indent=2)
     
-    print(">>> Synthetic Data Generated.")
-    print(f">>> Clinical Input Length: {len(clinical_input)} chars")
+    print(f">>> Synthetic Data Generated at {WORKLOAD_FILE}")
 
 if __name__ == "__main__":
     generate_configs()

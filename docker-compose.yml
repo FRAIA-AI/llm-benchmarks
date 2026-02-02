@@ -8,6 +8,7 @@ services:
     ipc: host
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      # Force NVLink usage for H100 clusters
       - NCCL_P2P_LEVEL=NVL
     volumes:
       - ./hf_cache:/root/.cache/huggingface
@@ -36,6 +37,7 @@ services:
     environment:
       - MODEL_NAME=${MODEL_NAME}
       - TEST_TYPE=${TEST_TYPE}
+      - CONFIG_DIR=/app/configs
     volumes:
       - ./results:/app/results
       - ./configs:/app/configs
