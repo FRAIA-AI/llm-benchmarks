@@ -12,3 +12,4 @@ venv/
 # Local files
 results/
 configs/
+hf_cache/
