@@ -160,7 +160,7 @@ def generate_configs():
             "max_tokens": 1024,
             "temperature": 0.0,
             "concurrency": 64,
-            "requests_count": 200
+            "requests_count": 256
         },
         "clinical": {
             "system_prompt": CLINICAL_SYSTEM_PROMPT,
@@ -168,7 +168,7 @@ def generate_configs():
             "max_tokens": 1500,
             "temperature": 0.1,
             "concurrency": clinical_concurrency,
-            "requests_count": 20
+            "requests_count": 64
         }
     }
 
