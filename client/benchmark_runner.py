@@ -3,6 +3,7 @@ import json
 import time
 import math
 import asyncio
+from unittest import result
 import aiohttp
 from collections import Counter
 
@@ -18,6 +19,7 @@ TEST_TYPE = os.environ["TEST_TYPE"]                # diarization | clinical
 BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
 RESULTS_DIR = os.environ.get("RESULTS_DIR", "./results")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "./configs")
+VERBOSE = os.getenv("BENCH_VERBOSE", "0") == "1"
 
 API_URL = (
     f"{BASE_URL}/v1/chat/completions"
@@ -194,8 +196,8 @@ async def main():
         json.dump(result, f, indent=2)
 
     print(f">>> Report saved: {out_file}")
-    print(json.dumps(result, indent=2))
-
+    if VERBOSE:
+        print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
     asyncio.run(main())
