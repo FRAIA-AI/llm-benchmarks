@@ -38,6 +38,32 @@ else
     echo ">>> Running in DOCKER mode"
 fi
 
+get_max_len() {
+  case "$1" in
+    epfl-llm/meditron-70b)
+      echo 4096
+      ;;
+    m42-health/Llama3-Med42-70B)
+      echo 8192
+      ;;
+    aaditya/Llama3-OpenBioLLM-70B)
+      echo 8192
+      ;;
+    abacusai/Dracarys2-72B-Instruct)
+      echo 16384
+      ;;
+    Qwen/Qwen2.5-72B-Instruct)
+      echo 16384
+      ;;
+    meta-llama/Llama-3.3-70B-Instruct)
+      echo 16384
+      ;;
+    *)
+      echo 8192
+      ;;
+  esac
+}
+
 echo "======================================================="
 echo "   H100 BENCHMARK SUITE ($MODE)"
 echo "======================================================="
@@ -58,7 +84,7 @@ run_local() {
     NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
         --model $model \
         --tensor-parallel-size $tp \
-        --max-model-len 16384 \
+        --max-model-len $(get_max_len "$model") \
         --trust-remote-code \
         --disable-log-requests \
         --gpu-memory-utilization 0.90 \
@@ -139,7 +165,7 @@ DIARIZATION_MODELS=(
 #    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 #    "Qwen/Qwen2.5-14B-Instruct"
 #    "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    "mistralai/Mistral-Nemo-Instruct-2407"
+#    "mistralai/Mistral-Nemo-Instruct-2407"
 )
 
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"
@@ -156,8 +182,8 @@ done
 # PHASE 2: CLINICAL NOTES
 CLINICAL_MODELS=(
     "epfl-llm/meditron-70b"
-    "clinicalnlplab/me-llama-70B-chat"
     "m42-health/Llama3-Med42-70B"
+    "m42-health/Llama3-Med42-8B"
     "aaditya/Llama3-OpenBioLLM-70B"
     "abacusai/Dracarys2-72B-Instruct"
     "meta-llama/Llama-3.3-70B-Instruct"
