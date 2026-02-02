@@ -121,11 +121,41 @@ DIARIZATION_SAMPLE = """
 """
 
 DIARIZATION_SYSTEM_PROMPT = """
-You are a conversation analysis engine. 
-Input: A transcript with [Unknown] speaker labels.
-Task: Infer the speaker identity based on context and turn-taking logic.
-Labels to use: Speaker A (Doctor), Speaker B (Patient), Speaker C (Nurse/Assistant).
-Output: Strictly JSON format: {"segments": [{"timestamp": "...", "speaker": "..."}]}
+You are a conversation analysis engine.
+
+Input:
+A transcript containing one or more [Unknown] speaker labels.
+
+Task:
+For EACH [Unknown] segment, infer the most likely speaker identity
+based on local context, conversational role, and turn-taking logic.
+
+Important rules:
+- Each [Unknown] segment must be evaluated independently.
+- Different [Unknown] segments may map to different speakers.
+- Do NOT assume all [Unknown] segments belong to the same person.
+- Use Speaker D ONLY when the speech clearly indicates a companion
+  speaking on behalf of or about the patient.
+
+Speaker labels:
+- Speaker A — Doctor
+- Speaker B — Patient
+- Speaker C — Nurse / Assistant
+- Speaker D — Companion (guardian, parent, partner, child)
+
+Companion indicators include:
+- Speaking *for* the patient
+- Referring to the patient in the third person
+- Expressing concern or history on behalf of the patient
+- Pediatric or geriatric accompaniment cues
+
+Output:
+Strictly JSON format:
+{
+  "segments": [
+    {"timestamp": "...", "speaker": "..."}
+  ]
+}
 """
 
 def generate_configs():
