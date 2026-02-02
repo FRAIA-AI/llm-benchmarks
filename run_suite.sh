@@ -246,6 +246,31 @@ for model in "${CLINICAL_MODELS[@]}"; do
     sleep 10
 done
 
+# =========================================================
+# PHASE 3: CLINICAL NOTES (HIGH CONCURRENCY)
+# =========================================================
+CLINICAL_CONCURRENT=8
+
+echo ">>> STARTING PHASE 3: CLINICAL DEEP DIVE (CONCURRENCY=$CLINICAL_CONCURRENT)"
+
+export CLINICAL_CONCURRENCY_OVERRIDE="$CLINICAL_CONCURRENT"
+
+CLINICAL_MODELS=(
+    "m42-health/Llama3-Med42-70B"
+    "m42-health/Llama3-Med42-8B"
+)
+
+for model in "${CLINICAL_MODELS[@]}"; do
+    if [[ "$MODE" == "local" ]]; then
+        run_local "$model" 8 "clinical" 900
+    else
+        run_docker "$model" 8 "clinical" 900
+    fi
+    sleep 10
+done
+
+unset CLINICAL_CONCURRENCY_OVERRIDE
+
 echo "======================================================="
 echo "   BENCHMARK COMPLETE"
 echo "======================================================="

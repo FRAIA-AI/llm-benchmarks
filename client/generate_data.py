@@ -152,7 +152,7 @@ Output format (strict):
 
 def generate_configs():
     clinical_input = PATIENT_CONTEXT + "\n\n=== TRANSCRIPT ===\n" + COMPLEX_TRANSCRIPT
-    
+    clinical_concurrency = int(os.getenv("CLINICAL_CONCURRENCY_OVERRIDE", 4))
     workloads = {
         "diarization": {
             "system_prompt": DIARIZATION_SYSTEM_PROMPT,
@@ -167,7 +167,7 @@ def generate_configs():
             "user_prompt": clinical_input,
             "max_tokens": 1500,
             "temperature": 0.1,
-            "concurrency": 4,
+            "concurrency": clinical_concurrency,
             "requests_count": 20
         }
     }
