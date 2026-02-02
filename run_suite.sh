@@ -38,6 +38,17 @@ else
     echo ">>> Running in DOCKER mode"
 fi
 
+get_max_len() {
+  case "$1" in
+    google/gemma-2-9b-it)
+      echo 8192
+      ;;
+    *)
+      echo 16384
+      ;;
+  esac
+}
+
 echo "======================================================="
 echo "   H100 BENCHMARK SUITE ($MODE)"
 echo "======================================================="
@@ -58,7 +69,7 @@ run_local() {
     NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
         --model $model \
         --tensor-parallel-size $tp \
-        --max-model-len 16384 \
+        --max-model-len $(get_max_len "$model") \
         --trust-remote-code \
         --disable-log-requests \
         --gpu-memory-utilization 0.90 \
@@ -139,7 +150,7 @@ DIARIZATION_MODELS=(
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
     "Qwen/Qwen2.5-14B-Instruct"
     "meta-llama/Meta-Llama-3.1-8B-Instruct"
-#    "mistralai/Mistral-Nemo-Instruct-2407"
+    "mistralai/Mistral-Nemo-Instruct-2407"
     "google/gemma-2-9b-it"
 )
 
