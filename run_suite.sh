@@ -38,17 +38,6 @@ else
     echo ">>> Running in DOCKER mode"
 fi
 
-get_max_len() {
-  case "$1" in
-    google/gemma-2-9b-it)
-      echo 8192
-      ;;
-    *)
-      echo 16384
-      ;;
-  esac
-}
-
 echo "======================================================="
 echo "   H100 BENCHMARK SUITE ($MODE)"
 echo "======================================================="
@@ -69,7 +58,7 @@ run_local() {
     NCCL_P2P_LEVEL=NVL nohup python3 -m vllm.entrypoints.openai.api_server \
         --model $model \
         --tensor-parallel-size $tp \
-        --max-model-len $(get_max_len "$model") \
+        --max-model-len 16384 \
         --trust-remote-code \
         --disable-log-requests \
         --gpu-memory-utilization 0.90 \
