@@ -153,7 +153,7 @@ CLINICAL_MODELS=(
     "clinicalnlplab/me-llama-70B-chat"
     "m42-health/Llama3-Med42-70B"
     "aaditya/Llama3-OpenBioLLM-70B"
-    "Dracarys2-72B-Instruct"
+    "abacusai/Dracarys2-72B-Instruct"
     "meta-llama/Llama-3.3-70B-Instruct"
     "Qwen/Qwen2.5-72B-Instruct"
     "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
