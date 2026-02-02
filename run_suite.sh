@@ -1,6 +1,6 @@
-#!/bin/bash
+// run_suite.sh
 
-# run_suite.sh
+#!/bin/bash
 
 # 1. Setup & Checks
 if [ -f .env ]; then
@@ -15,11 +15,12 @@ fi
 RESULTS_DIR="./results"
 CACHE_DIR="./hf_cache"
 CONFIGS_DIR="./configs"
+ERROR_LOG="./results/error_log.txt"
 
-# Ensure all host directories exist before Docker starts to prevent root-ownership issues
 mkdir -p $RESULTS_DIR
 mkdir -p $CACHE_DIR
 mkdir -p $CONFIGS_DIR
+touch $ERROR_LOG
 
 echo "======================================================="
 echo "   PEOPLES DOCTOR - H100 BENCHMARK SUITE"
@@ -28,6 +29,37 @@ echo "Date: $(date)"
 echo "Output Directory: $RESULTS_DIR"
 echo "Cache Directory: $CACHE_DIR"
 echo "======================================================="
+
+# Function to run benchmark with resilience
+execute_benchmark() {
+    local model=$1
+    local tp=$2
+    local type=$3
+    local timeout=$4
+
+    echo "----------------------------------------------------"
+    echo ">>> TESTING: $model ($type)"
+    echo "----------------------------------------------------"
+    
+    export MODEL_NAME=$model
+    export TENSOR_PARALLEL_SIZE=$tp
+    export TEST_TYPE=$type
+    
+    # Execute with timeout and capture exit status
+    timeout "${timeout}s" docker compose up --build --abort-on-container-exit
+    local status=$?
+
+    if [ $status -eq 124 ]; then
+        echo "!!! TIMEOUT: $model exceeded ${timeout}s limit. Skipping..." | tee -a "$ERROR_LOG"
+    elif [ $status -ne 0 ]; then
+        echo "!!! FAILURE: $model failed with exit code $status. Skipping..." | tee -a "$ERROR_LOG"
+    else
+        echo ">>> SUCCESS: $model completed."
+    fi
+    
+    # Ensure cleanup occurs regardless of success or failure
+    docker compose down
+}
 
 # -----------------------------------------------------------------------------
 # PHASE 1: DIARIZATION JUDGE (Small/Medium Models)
@@ -45,19 +77,7 @@ DIARIZATION_MODELS=(
 echo ">>> STARTING PHASE 1: DIARIZATION JUDGE"
 
 for model in "${DIARIZATION_MODELS[@]}"; do
-    echo "----------------------------------------------------"
-    echo ">>> TESTING: $model"
-    echo "----------------------------------------------------"
-    
-    export MODEL_NAME=$model
-    # TP=1 allows vLLM to manage batching on a single GPU (or replicate across GPUs)
-    export TENSOR_PARALLEL_SIZE=1 
-    export TEST_TYPE="diarization"
-    
-    # 8 minute maximum for small models
-    timeout 480s docker compose up --build --abort-on-container-exit
-    
-    docker compose down
+    execute_benchmark "$model" 1 "diarization" 480
     sleep 5
 done
 
@@ -79,25 +99,17 @@ CLINICAL_MODELS=(
 echo ">>> STARTING PHASE 2: CLINICAL DEEP DIVE (SOAP Notes)"
 
 for model in "${CLINICAL_MODELS[@]}"; do
-    echo "----------------------------------------------------"
-    echo ">>> TESTING: $model"
-    echo "----------------------------------------------------"
-    
-    export MODEL_NAME=$model
-    # TP=8 forces the model to split across all 8 GPUs using NVLink/Infinity Fabric
-    export TENSOR_PARALLEL_SIZE=8 
-    export TEST_TYPE="clinical"
-    
-    # 15 minute maximum for large models to account for VRAM loading and generation
-    timeout 900s docker compose up --build --abort-on-container-exit
-    
-    docker compose down
+    execute_benchmark "$model" 8 "clinical" 900
     sleep 10
 done
 
 echo "======================================================="
 echo "   BENCHMARK COMPLETE - COMPRESSING RESULTS"
 echo "======================================================="
+
+if [ -s "$ERROR_LOG" ]; then
+    echo "Warning: Some models failed. Check $ERROR_LOG for details."
+fi
 
 tar -czf benchmark_results.tar.gz results/
 echo ">>> Results saved to benchmark_results.tar.gz"
