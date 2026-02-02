@@ -129,7 +129,6 @@ Output: Strictly JSON format: {"segments": [{"timestamp": "...", "speaker": "...
 """
 
 def generate_configs():
-    # Construct final prompts
     clinical_input = PATIENT_CONTEXT + "\n\n=== TRANSCRIPT ===\n" + COMPLEX_TRANSCRIPT
     
     workloads = {
@@ -137,16 +136,16 @@ def generate_configs():
             "system_prompt": DIARIZATION_SYSTEM_PROMPT,
             "user_prompt": DIARIZATION_SAMPLE,
             "max_tokens": 512,
-            "temperature": 0.1,
-            "concurrency": 64,   # High concurrency to stress throughput
+            "temperature": 0.0,
+            "concurrency": 64,
             "requests_count": 200
         },
         "clinical": {
             "system_prompt": CLINICAL_SYSTEM_PROMPT,
             "user_prompt": clinical_input,
-            "max_tokens": 1500,  # Long generation for SOAP notes
-            "temperature": 0.2,
-            "concurrency": 4,    # Low concurrency to simulate heavy single-user load
+            "max_tokens": 1500,
+            "temperature": 0.1,
+            "concurrency": 4,
             "requests_count": 20
         }
     }
